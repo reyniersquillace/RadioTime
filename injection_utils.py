@@ -1,6 +1,7 @@
 import numpy as np
+import scipy.stats as stats
 from scipy.fft import fft
-from scipy.stats import chi2
+from scipy.special import chdtri
 
 nchan = 16384  #number of spectral channels in backend -- CHIME
 default_freqs = np.linspace(400.0, 800.0, nchan)  # in MHz for CHIME band
@@ -112,7 +113,7 @@ def disperse(prof, deltaDM, DM_labels, kernels, kernel_scaling):
         dispersed_prof_fft[i] = prof_fft * kernels[key]
         i += 1
 
-    return dispersed_prof_fft
+    return dispersed_prof_fft, i0
 
 def harmonics(prof_fft, f_true, df, n_harm):
     
@@ -149,9 +150,17 @@ def harmonics(prof_fft, f_true, df, n_harm):
 
     return bins, harmonics
 
-def smear_harms(pulse, Pspin, sigma, df, n_harm, nfreqbins, deltaDM, DM_labels, 
+def smear_harms(pulse, Pspin, sigma, df, nfreqbins, deltaDM, DM_labels, 
                 kernels, kernel_scaling, noise = False, nu = 2):
-    dispersed_prof_fft = disperse(pulse, deltaDM, DM_labels, kernels, kernel_scaling)
+    dispersed_prof_fft, i0 = disperse(pulse, deltaDM, DM_labels, kernels, kernel_scaling)
+
+    f_nyquist = np.floor(df*nfreqbins / 2)
+    f = 1/Pspin
+    n_harm = int(np.floor(f_nyquist / f))
+    print(f'n_harm = {n_harm}')
+
+    bins_i0, harm_i0 = harmonics(dispersed_prof_fft[i0], 1/Pspin, df, n_harm)
+    poweri0 = np.sum(harm_i0)
 
     if noise:
         #average power across bins will be equal to degrees of freedom
@@ -159,13 +168,92 @@ def smear_harms(pulse, Pspin, sigma, df, n_harm, nfreqbins, deltaDM, DM_labels,
         #such that for a 1-day stack (nu = 2) the average power is 1
         #for a 2-day stack (nu = 4) the average power is 2
         #etc...
-        smeared_harm = chi2.rvs(nu, size = (len(DM_labels), nfreqbins))/2
+        smeared_harm = stats.chi2.rvs(nu, size = (len(DM_labels), nfreqbins))/2
+        power = sigma_to_power(sigma, nu) - nu/2
 
     else:
         smeared_harm = np.zeros((len(DM_labels), nfreqbins))
+        #is this right? not a chi-squared distribution at all...
+        power = sigma_to_power(sigma, nu)
 
     for i in range(len(smeared_harm)):
         bins, harm = harmonics(dispersed_prof_fft[i], 1/Pspin, df, n_harm)
-        smeared_harm[i, bins] = harm
+        smeared_harm[i, bins] += harm*power/poweri0
 
-    return smeared_harm
+    #smeared_i0 = np.copy(smeared_harm[i0])
+
+    return smeared_harm, bins
+
+def x_to_chi2(x, nu):
+    
+    #Note about A&S 26.4.16: I found this returned higher-error results than the 
+    # x > 30 approximation
+    
+    if x <= 7.3:
+        mean = 0.0
+        sd = 1.0
+        
+        # Calculate the cumulative distribution function (CDF) of normal distribution
+        p = stats.norm.cdf(x, loc=mean, scale=sd)
+        
+        # Calculate the cumulative distribution function (CDF) of chi-squared distribution
+        chi2 = stats.chi2.ppf(p, nu)
+
+        return chi2
+    
+    else:
+        #A&S 26.2.23. This is the inverse of the operation for logp in PRESTO
+        A = 2.515517
+        B = 0.802853
+        C = 0.010328
+        D = 1.432788
+        E = 0.189269
+        F = 0.001308
+        const = np.array([F, E - x*F, D - C - x*E, 1 - B - x*D, -(x + A)])
+        t = np.roots(const)[1]
+        prob = np.exp(-t**2/2)
+        
+        chi2 = chdtri(nu, prob)
+
+        return chi2
+
+def sigma_to_power(sigma, nu):
+
+    chi2 = x_to_chi2(sigma, nu)
+    power = chi2/2
+    
+    return power
+
+def fold_harmonics(power_spectrum, bins, deltaDM, DM_labels, nu = 2,
+                   harms_to_use = 'all'):
+    
+    i = 0
+    DM_start = np.argmin(np.abs(-0.5*deltaDM - DM_labels))
+    DM_stop = np.argmin(np.abs(0.5*deltaDM - DM_labels))
+    stamp = np.zeros((len(power_spectrum[DM_start:DM_stop]), 104)) 
+    #keep 50 bins on either side of harmonic
+
+    #figure out how many harmonics we want to fold over
+    if harms_to_use != 'all':
+        bins = np.copy(bins[:4*harms_to_use])
+        #note: the number of harms to add is GREATER than the actual number of 
+        #harmonics before the Nyquist cutoff frequency, then the signal will
+        #decrease, as we will be adding pure noise to the stamp
+            
+    while i < len(bins):
+        freq_start = bins[i]
+        if i == 0 and bins[i] < 50:
+            temp_stamp = stats.chi2.rvs(nu, size = stamp.shape)/2
+            temp_stamp[:, :freq_start+54] = power_spectrum[DM_start:DM_stop,
+                                                             :freq_start+54]
+            stamp += temp_stamp
+
+        else:
+            stamp += power_spectrum[DM_start:DM_stop, 
+                                    freq_start - 50:freq_start+54]
+
+        i += 4
+
+    return stamp
+
+
