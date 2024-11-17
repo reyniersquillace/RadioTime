@@ -6,18 +6,23 @@ import pypulse as pp
 import scipy.optimize as opt
 import scipy.signal as sgn
 import bisect
+import astropy.units as u
 
-def gaussian(x, sig, mu):
+def gaussian(x, sig, mu, shift, scale):
+
     curve = np.exp(-0.5*((x - mu)/sig)**2)/(sig*np.sqrt(2*np.pi))
-    curve /= max(curve)
+    curve *= scale / max(curve)
+    curve += shift
+
     return curve
 
-def lorentzian(x, fwhm, mu):
+def lorentzian(x, fwhm, mu, shift, scale):
      
     hwhm = fwhm / 2
 
     curve = (hwhm / ((x - mu)**2 + hwhm**2 )) / np.pi
-    curve /= max(curve)
+    curve *= scale / max(curve)
+    curve += shift
 
     return curve
 
@@ -78,16 +83,26 @@ def get_stamp(acf, time_lag, freq_lag, plot = True):
     freq_lags = np.linspace(-freq_lag, freq_lag, len(freq_acf))
 
     if plot:
-
-        plt.imshow(acf[flow:fhigh, tlow:thigh],
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize = (10, 4))
+        ax1.imshow(acf,
+                    aspect = 'auto',
+                    cmap = 'magma',
+                    extent = [-time_lag, time_lag,
+                              -freq_lag, freq_lag],           
+        )
+        ax2.imshow(acf[flow:fhigh, tlow:thigh],
                     aspect = 0.05,
                     cmap = 'magma',
                     extent = [time_lags[tlow], time_lags[thigh],
                               freq_lags[flow], freq_lags[fhigh]],
          )
-        plt.title('ACF Stamp')
-        plt.xlabel('Time Lag (hr)')
-        plt.ylabel('Frequency Lag (MHz)')
+        ax1.set_title('Full ACF')
+        ax1.set_xlabel('Time Lag (hr)')
+        ax1.set_ylabel('Frequency Lag (MHz)')
+        ax2.set_title('Fitting Region')
+        ax2.set_xlabel('Time Lag (hr)')
+        plt.tight_layout()
 
     return time_acf, time_lags, freq_acf, freq_lags
 
@@ -103,24 +118,24 @@ def get_fwhm(xs, lag_sum, plot = True, lagtype = None):
         return
     
     low, high, max_idx = get_range(lag_sum)
-    #lag_sum[max_idx] = (lag_sum[max_idx - 1] + lag_sum[max_idx + 1]) / 2
+    lag_sum[max_idx] = (lag_sum[max_idx - 1] + lag_sum[max_idx + 1]) / 2
     lag_sum /= lag_sum[max_idx]
 
     par_gauss = opt.curve_fit(gaussian, xs[low:high], lag_sum[low:high], 
-                        p0 = [0.02*xs[high], 0])
-    sig, mu_gauss = par_gauss[0][0], par_gauss[0][1]
+                        p0 = [0.02*xs[high], 0, 0, 1])
+    sig, mu_gauss, shift_gauss, scale_gauss = par_gauss[0]
     cov_gauss = par_gauss[1]
     fwhm_conv = 2*np.sqrt(2 * np.log(2))
     fwhm_gauss = fwhm_conv * sig
-    #there is no way this is legal:
-    perr_gauss = np.sqrt(np.sum(np.diag(cov_gauss)**2))
+    # #there is no way this is legal:
+    # perr_gauss = np.sqrt(np.sum(np.diag(cov_gauss)**2))
 
-    par_lorentz = opt.curve_fit(lorentzian, xs[low:high], lag_sum[low:high], 
-                                                p0 = [0.02*xs[high], 0])
-    fwhm_lorentz, mu_lorentz = par_lorentz[0][0], par_lorentz[0][1]
-    cov_lorentz = par_lorentz[1]
-    #what the fuck am i doing here
-    perr_lorentz = np.sqrt(np.sum(np.diag(cov_lorentz))**2)
+    # par_lorentz = opt.curve_fit(lorentzian, xs[low:high], lag_sum[low:high], 
+    #                                     p0 = [0.02*xs[high], 0, 0.5, 0.5])
+    # fwhm_lorentz, mu_lorentz, shift_lorentz, scale_lorentz = par_lorentz[0]
+    # cov_lorentz = par_lorentz[1]
+    # #what the fuck am i doing here
+    # perr_lorentz = np.sqrt(np.sum(np.diag(cov_lorentz))**2)
 
     if plot:
 
@@ -128,17 +143,19 @@ def get_fwhm(xs, lag_sum, plot = True, lagtype = None):
         ax1.set_title('Full ACF')
         ax1.plot(xs, lag_sum, 'k')
         ax1.plot(xs[low:high], lag_sum[low:high], 'r', label = 'Fit Range')
-        ax1.plot(xs[low:high], gaussian(xs[low:high], sig, mu_gauss), 'b--', 
-                 label = 'Gaussian Fit')
-        ax1.plot(xs[low:high], lorentzian(xs[low:high], fwhm_lorentz, 
-                 mu_lorentz), 'g--', label = 'Lorentzian Fit')
+        ax1.plot(xs[low:high], gaussian(xs[low:high], sig, mu_gauss, shift_gauss, 
+                scale_gauss), 'b--', label = 'Gaussian Fit')
+        #ax1.plot(xs[low:high], lorentzian(xs[low:high], fwhm_lorentz, mu_lorentz, 
+        #        shift_gauss, scale_gauss), 'g--', label = 'Lorentzian Fit')
         
         ax2.set_title('Central Region')
         ax2.plot(xs[low:high], lag_sum[low:high], 'r', label = 'Fit Range')
-        ax2.plot(xs[low:high], gaussian(xs[low:high], sig, mu_gauss), 'b--', 
-                 label = 'Gaussian Fit')
-        ax2.plot(xs[low:high], lorentzian(xs[low:high], fwhm_lorentz, 
-                 mu_lorentz), 'g--', label = 'Lorentzian Fit')
+        ax2.plot(xs[low:high], gaussian(xs[low:high], sig, mu_gauss, shift_gauss,
+                scale_gauss), 'b--', 
+                label = 'Gaussian Fit')
+        #ax2.plot(xs[low:high], lorentzian(xs[low:high], fwhm_lorentz, 
+        #        mu_lorentz, shift_lorentz, scale_lorentz), 'g--', 
+        #        label = 'Lorentzian Fit')
 
         if lagtype in ('time', 'Time', 't'):
                 fig.suptitle('1D Time ACF')
@@ -151,14 +168,17 @@ def get_fwhm(xs, lag_sum, plot = True, lagtype = None):
                 ax2.set_xlabel('Frequency Lag (MHz)')
 
         ax1.set_ylabel('Intensity')
-        plt.legend()
+        ax1.legend()
+        ax2.legend()
 
-    if perr_gauss < perr_lorentz:   
-        print(f'Best fit for {lagtype} was a Gaussian.')
-        return fwhm_gauss, mu_gauss
-    else:
-        print(f'Best fit for {lagtype} was a Lorentzian.')
-        return fwhm_lorentz, mu_lorentz
+    # if perr_gauss < perr_lorentz:   
+    #     print(f'Best fit for {lagtype} was a Gaussian.')
+    #     return fwhm_gauss, mu_gauss
+    # else:
+    #     print(f'Best fit for {lagtype} was a Lorentzian.')
+    #     return fwhm_lorentz, mu_lorentz
+    
+    return fwhm_gauss, mu_gauss
 
 
 def fit1D(ds, hrs, freqs):
@@ -168,12 +188,25 @@ def fit1D(ds, hrs, freqs):
     freq_lag = freqs[-1] - freqs[0]
     time_acf, time_lags, freq_acf, freq_lags = get_stamp(acf, time_lag, freq_lag)
 
-    dt, t0 = get_fwhm(time_lags, time_acf, lagtype = 'time')
-    dnu, nu0 = get_fwhm(freq_lags, freq_acf, lagtype = 'frequency')
+    dt, t0 = get_fwhm(time_lags, time_acf, lagtype = 'time') * u.hr
+    dnu, nu0 = get_fwhm(freq_lags, freq_acf, lagtype = 'frequency') * u.MHz
 
-    print(f'dt = {dt} hrs, dnu = {dnu} MHz')
+    print(f'dt = {np.round(dt.to(u.min), 3)}, dnu = {np.round(dnu, 3)}')
 
-    return dt, t0, dnu, nu0
+    return dt, dnu
+
+def scattering_timescale(ds, hrs, freqs, C1 = 1, eta_t = 0.2, eta_nu = 0.2):
+     
+    dt, dnu = fit1D(ds, hrs, freqs)
+    tau_d = (C1 / 2 / np.pi / dnu).to(u.us)
+    print(f'tau_d = {np.round(tau_d, 3)}')
+    T = (hrs[-1] - hrs[0])*u.hr
+    B = ((freqs[-1] - freqs[0])*u.MHz).to(u.Hz)
+
+    n_ISS = (1 + eta_t * T / dt) * (1 + eta_nu*B / dnu)
+    sig_DISS = (tau_d / np.sqrt(n_ISS))
+
+    return tau_d, sig_DISS
 
 
 
