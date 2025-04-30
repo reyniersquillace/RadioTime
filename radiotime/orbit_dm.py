@@ -16,7 +16,7 @@ class orbit:
         self.b = self.semiminor()
         self.p = self.get_p()
         self.i = i
-        self.w = w
+        self.w = w.to(u.radian).value
         self.c = np.sqrt(self.a**2 - self.b**2)
         self.closest_approach = self.a - self.c
 
