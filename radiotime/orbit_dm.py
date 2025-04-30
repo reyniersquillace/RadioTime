@@ -6,7 +6,7 @@ from scipy.integrate import quad
 
 class orbit:
 
-    def __init__(self, T, M, m, e, i):
+    def __init__(self, T, M, m, e, i, w):
 
         self.T = T
         self.M = M
@@ -16,6 +16,7 @@ class orbit:
         self.b = self.semiminor()
         self.p = self.get_p()
         self.i = i
+        self.w = w
         self.c = np.sqrt(self.a**2 - self.b**2)
         self.closest_approach = self.a - self.c
 
@@ -73,14 +74,14 @@ class orbit:
 
         return nu
 
-    def alpha_from_nu(self, nu, w):
+    def alpha_from_nu(self, nu):
 
-        return np.arccos(np.sin(self.i) * np.sin(w + nu))
+        return np.arccos(np.sin(self.i) * np.sin(self.w + nu))
                 
-    def DM_mock(self, t, K, w):
+    def DM_mock(self, t, K):
 
         nu = self.nu_from_t(t)
-        alpha = self.alpha_from_nu(nu, w).value
+        alpha = self.alpha_from_nu(nu, self.w).value
         r = self.r_from_t(t)
 
         return (K*alpha / r / np.sin(alpha)).to(u.pc * u.cm**(-3))
