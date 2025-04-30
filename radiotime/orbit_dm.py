@@ -76,6 +76,7 @@ class orbit:
 
     def alpha_from_nu(self, nu):
 
+        print(self.w + nu)
         return np.arccos(np.sin(self.i) * np.sin(self.w + nu))
                 
     def DM_mock(self, t, K):
